@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Drowsiness Detection Dashboard</title>
+  <!-- Local Tailwind CSS -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='tailwind.min.css') }}">
+  <!-- Local Font Awesome CSS -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='fontawesome.min.css') }}">
+  <!-- Local Chartist JS -->
+  <script src="{{ url_for('static', filename='chartist.min.js') }}"></script>
+  <!-- Local Plotly JS -->
+  <script src="{{ url_for('static', filename='plotly-latest.min.js') }}"></script>
+  <!-- Local Chartist CSS -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='chartist.min.css') }}">
+  <style>
+	.pulse-animation {
+  	animation: pulse 1.5s infinite;
+	}
+	@keyframes pulse {
+  	0% { transform: scale(1); opacity: 0.7; }
+  	50% { transform: scale(1.02); opacity: 1; }
+  	100% { transform: scale(1); opacity: 0.7; }
+	}
+	.ct-chart {
+  	min-height: 300px;
+	}
+  </style>
+</head>
+<body class="bg-gray-50 font-sans">
+  <div class="max-w-6xl mx-auto p-6">
+	<h1 class="text-3xl font-bold text-center text-gray-800 mb-6">Drowsiness Detection Dashboard</h1>
+
+	<!-- Alert -->
+	<div id="drowsinessAlert" class="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded-lg flex items-center justify-center mb-6">
+  	<span id="sleepAlertText" class="font-bold text-lg">Sleep Detection Alert: AWAKE</span>
+	</div>
+
+	<!-- LiDAR Cards -->
+	<div class="grid grid-cols-3 gap-4 mb-6">
+  	<div class="p-4 rounded-lg shadow-md bg-blue-50 flex flex-col items-center">
+    	<i class="fas fa-arrow-right text-blue-500 mb-2"></i>
+    	<span class="text-sm font-semibold text-blue-800">Right Distance</span>
+    	<div class="text-2xl font-bold text-blue-800" id="right_distance">-- cm</div>
+  	</div>
+  	<div class="p-4 rounded-lg shadow-md bg-blue-50 flex flex-col items-center">
+    	<i class="fas fa-arrow-left text-blue-500 mb-2"></i>
+    	<span class="text-sm font-semibold text-blue-800">Left Distance</span>
+    	<div class="text-2xl font-bold text-blue-800" id="left_distance">-- cm</div>
+  	</div>
+  	<div id="lidar_alert" class="p-4 rounded-lg shadow-md flex flex-col items-center">
+    	<i class="fas fa-car-crash mb-2"></i>
+    	<span class="text-sm font-semibold">Obstacle Proximity</span>
+    	<div class="text-2xl font-bold" id="lidar_status">Safe</div>
+  	</div>
+	</div>
+
+	<!-- Data Cards -->
+	<div class="grid grid-cols-3 gap-4 mb-6">
+  	<div class="p-4 rounded-lg shadow-md bg-red-50 flex flex-col items-center">
+    	<div class="flex items-center mb-2">
+      	<i class="fas fa-heart text-red-500 mr-2"></i>
+      	<span class="font-semibold text-red-600">Heart Rate</span>
+    	</div>
+    	<div class="text-2xl font-bold text-red-800" id="bpm_status">-- BPM</div>
+  	</div>
+
+  	<div class="p-4 rounded-lg shadow-md bg-blue-50 flex flex-col items-center">
+    	<div class="flex items-center mb-2">
+      	<i class="fas fa-eye text-blue-500 mr-2"></i>
+      	<span class="font-semibold text-blue-800">Eye Aspect Ratio</span>
+    	</div>
+    	<div class="text-2xl font-bold text-blue-800" id="ear">-- EAR</div>
+    	<div class="text-sm text-blue-800">Stable</div>
+  	</div>
+
+  	<div class="p-4 rounded-lg shadow-md bg-purple-50 flex flex-col items-center">
+    	<div class="flex items-center mb-2">
+      	<i class="fas fa-moon text-purple-500 mr-2"></i>
+      	<span class="font-semibold text-purple-800">Sleep Status</span>
+    	</div>
+    	<div class="text-2xl font-bold text-purple-800" id="sleep_prediction">--</div>
+    	<div class="text-sm text-purple-800">Prediction</div>
+  	</div>
+	</div>
+
+	<!-- Charts -->
+	<div class="grid grid-cols-2 gap-4">
+  	<div class="bg-white rounded-lg shadow-md p-4">
+    	<h3 class="text-lg font-semibold mb-4 text-center">Heart Rate</h3>
+    	<div id="bpmChart" class="ct-chart"></div>
+  	</div>
+  	<div class="bg-white rounded-lg shadow-md p-4">
+    	<h3 class="text-lg font-semibold mb-4 text-center">Eye Aspect Ratio</h3>
+    	<div id="earChart" class="ct-chart"></div>
+  	</div>
+	</div>
+
+	<!-- LiDAR Polar Chart -->
+	<div class="bg-white rounded-lg shadow-md p-4 mt-6">
+  	<h3 class="text-lg font-semibold mb-4 text-center">LiDAR Polar Plot</h3>
+  	<div id="lidarPolarChart" style="height:600px;"></div>
+	</div>
+
+	<div class="text-center mt-6">
+  	<button onclick="window.location.href='/historic';" class="px-4 py-2 bg-gray-800 text-white rounded-lg hover:bg-gray-700">
+    	View Historic Data
+  	</button>
+	</div>
+  </div>
+
+  <!-- Local Chartist JS -->
+  <script src="{{ url_for('static', filename='chartist.min.js') }}"></script>
+  <script>
+	let cachedLabels = [];
+	let lastLabelUpdateTime = 0; // in milliseconds
+
+	function updateDashboard() {
+  	fetch('/data')
+    	.then(response => {
+      	if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+      	return response.json();
+    	})
+    	.then(data => {
+      	// Update charts and other text elements...
+      	// Convert data arrays
+      	let bpmArray = Array.isArray(data.bpm) ? data.bpm : [data.bpm];
+      	let earArray = Array.isArray(data.ear) ? data.ear : [data.ear];
+      	let newTimestamps = Array.isArray(data.timestamps) ? data.timestamps : [];
+
+      	// Cache the timestamps for 1 second
+      	let now = Date.now();
+      	if (now - lastLabelUpdateTime > 1000 || cachedLabels.length === 0) {
+        	cachedLabels = newTimestamps;
+        	lastLabelUpdateTime = now;
+      	}
+
+      	// Update BPM and EAR charts using cached labels
+      	bpmChart.update({ labels: cachedLabels, series: [bpmArray] });
+      	earChart.update({ labels: cachedLabels, series: [earArray] });
+      	document.getElementById('bpm_status').textContent = data.bpm[0];
+      	let currentEar = Array.isArray(data.ear) && data.ear.length > 0 ? data.ear[data.ear.length - 1] : 0;
+      	document.getElementById('ear').textContent = currentEar.toFixed(2);
+      	document.getElementById('sleep_prediction').textContent = data.model_accuracy;
+
+      	// Update LiDAR readings and status
+      	document.getElementById('right_distance').textContent = `${data.lidar.right_distance} cm`;
+      	document.getElementById('left_distance').textContent = `${data.lidar.left_distance} cm`;
+      	if (data.lidar && data.lidar.too_close !== undefined) {
+        	const lidarAlert = document.getElementById('lidar_alert');
+        	if (data.lidar.too_close) {
+          	lidarAlert.className = 'p-4 rounded-lg shadow-md bg-red-100 text-red-700 flex flex-col items-center';
+          	document.getElementById('lidar_status').textContent = "Not Safe";
+        	} else {
+          	lidarAlert.className = 'p-4 rounded-lg shadow-md bg-green-50 text-green-800 flex flex-col items-center';
+          	document.getElementById('lidar_status').textContent = "Safe";
+        	}
+      	} else {
+        	document.getElementById('lidar_status').textContent = "N/A";
+      	}
+
+      	// Update the sleep detection alert based on MQTT alert status
+      	const sleepAlertText = document.getElementById('sleepAlertText');
+      	const drowsinessAlertDiv = document.getElementById('drowsinessAlert');
+      	if (data.alert === "ALERT_ON") {
+        	sleepAlertText.textContent = "Sleep Detection Alert: SLEEPING";
+        	drowsinessAlertDiv.classList.remove('bg-green-100', 'border-green-400', 'text-green-700');
+        	drowsinessAlertDiv.classList.add('bg-red-100', 'border-red-400', 'text-red-700');
+      	} else if (data.alert === "ALERT_OFF") {
+        	sleepAlertText.textContent = "Sleep Detection Alert: AWAKE";
+        	drowsinessAlertDiv.classList.remove('bg-red-100', 'border-red-400', 'text-red-700');
+        	drowsinessAlertDiv.classList.add('bg-green-100', 'border-green-400', 'text-green-700');
+      	} else {
+        	sleepAlertText.textContent = "Sleep Detection Alert: Unknown";
+      	}
+
+      	// --- LiDAR Polar Chart Update using Plotly ---
+      	if (data.lidar && Array.isArray(data.lidar.offsets) && Array.isArray(data.lidar.intensities)) {
+        	const offsets = data.lidar.offsets;
+        	const intensitiesLidar = data.lidar.intensities;
+        	// Validate that each offset is a [angle, radius] pair
+        	const valid = offsets.every(item => Array.isArray(item) && item.length === 2);
+        	if (valid && offsets.length > 0) {
+          	const maxRadius = Math.max(...offsets.map(pair => pair[1]));
+          	const anglesInDegrees = offsets.map(pair => pair[0] * 180 / Math.PI);
+          	const radii = offsets.map(pair => pair[1]);
+
+          	const trace = {
+            	type: 'scatterpolar',
+            	mode: 'markers',
+            	r: radii,
+            	theta: anglesInDegrees,
+            	marker: {
+              	size: 5,
+              	color: intensitiesLidar,
+              	colorscale: 'Greys',
+              	line: { width: 0 }
+            	}
+          	};
+
+          	const layout = {
+            	polar: {
+              	radialaxis: {
+                	range: [0, maxRadius * 1.1],
+                	showgrid: true
+              	},
+              	angularaxis: {
+                	showgrid: true
+              	}
+            	},
+            	showlegend: false,
+            	margin: { t: 30, b: 30, l: 30, r: 30 }
+          	};
+
+          	if (!window.lidarPolarChartInitialized) {
+            	Plotly.newPlot('lidarPolarChart', [trace], layout);
+            	window.lidarPolarChartInitialized = true;
+          	} else {
+            	Plotly.react('lidarPolarChart', [trace], layout);
+          	}
+        	}
+      	}
+    	})
+    	.catch(error => {
+      	console.error('Error fetching data:', error);
+    	});
+	}
+
+	// BPM Chart configuration with label interpolation
+	let bpmChart = new Chartist.Line('#bpmChart', {
+  	labels: [],
+  	series: [[]]
+	}, {
+  	low: 40,
+  	high: 100,
+  	showPoint: false,
+  	lineSmooth: Chartist.Interpolation.simple({ divisor: 2 }),
+  	fullWidth: true,
+  	chartPadding: { right: 20 },
+  	axisX: {
+    	showGrid: true,
+    	showLabel: true,
+    	labelInterpolationFnc: function(value, index) {
+      	return (index % 10 === 0) ? value : '';
+    	}
+  	},
+  	axisY: {
+    	showGrid: true,
+    	showLabel: true
+  	}
+	});
+
+	// EAR Chart configuration
+	let earChart = new Chartist.Line('#earChart', {
+  	labels: [],
+  	series: [[]]
+	}, {
+  	low: 0.1,
+  	high: 0.4,
+  	showPoint: false,
+  	lineSmooth: Chartist.Interpolation.simple({ divisor: 2 }),
+  	fullWidth: true,
+  	chartPadding: { right: 20 },
+  	axisX: {
+    	showGrid: true,
+    	showLabel: true,
+    	labelInterpolationFnc: function(value, index) {
+      	return (index % 10 === 0) ? value : '';
+    	}
+  	},
+  	axisY: {
+    	showGrid: true,
+    	showLabel: true
+  	}
+	});
+
+	// Update every 100 ms
+	setInterval(updateDashboard, 100);
+	updateDashboard();  // Initial fetch
+  </script>
+</body>
+</html>
+
+
+
